@@ -4,16 +4,14 @@
 
 # load libraries, set dir ----
 library(reshape2)
+library(RCurl)
 library(maps)
 library(zoo)
 library(SPEI)
 library(tidyr)
+library(raster)
 library(xlsx)
 library(dplyr)
-library(ggplot2)
-library(raster)
-library(maps)
-library(RCurl)
 
 # FIPS codes
 data(county.fips)
@@ -82,6 +80,8 @@ allData$year<-(as.numeric(substr(allData$code, 8,11)))
 
 
 # loop through counties in state - Arizona
+datalist = list()
+
 for(i in 1:length(countyList)){ 
 
     #county<-subset(us,NAME_2==countyName)
@@ -118,38 +118,108 @@ for(i in 1:length(countyList)){
     spiData<-spei(ts(allDataSubset$precip-allDataSubset$PET_Harg,freq=12,start=c(1895,1)),12, na.rm = TRUE)
       allDataSubset$spei12<-spiData$fitted
     
-    # annual summaries
-    yearlySummary  <-allDataSubset %>% 
-        group_by(year) %>% 
-        summarize(tmean = mean(tmean),
-                  sumPrecip = sum(precip))
-    # diff from averages
-    yearlySummary$tmeanAnom<-yearlySummary$tmean-mean(yearlySummary$tmean)
-    yearlySummary$precipAnom<-yearlySummary$sumPrecip-mean(yearlySummary$sumPrecip)
-    # add in seasonal and annual drought indices - SPI
-    yearlySummary$JanDecSPI<-allDataSubset[which(allDataSubset$variable==12),9]
-    yearlySummary$JanMarSPI<-allDataSubset[which(allDataSubset$variable==3),8]
-    yearlySummary$AprJunSPI<-allDataSubset[which(allDataSubset$variable==6),8]
-    yearlySummary$JulSepSPI<-allDataSubset[which(allDataSubset$variable==9),8]
-    yearlySummary$OctDecSPI<-allDataSubset[which(allDataSubset$variable==12),8]
-    # add in seasonal and annual drought indices - SPEI
-    yearlySummary$JanDecSPEI<-allDataSubset[which(allDataSubset$variable==12),12]
-    yearlySummary$JanMarSPEI<-allDataSubset[which(allDataSubset$variable==3),11]
-    yearlySummary$AprJunSPEI<-allDataSubset[which(allDataSubset$variable==6),11]
-    yearlySummary$JulSepSPEI<-allDataSubset[which(allDataSubset$variable==9),11]
-    yearlySummary$OctDecSPEI<-allDataSubset[which(allDataSubset$variable==12),11]
+    # # annual summaries
+    # yearlySummary  <-allDataSubset %>% 
+    #     group_by(year) %>% 
+    #     summarize(tmean = mean(tmean),
+    #               sumPrecip = sum(precip))
+    # # diff from averages
+    # yearlySummary$tmeanAnom<-yearlySummary$tmean-mean(yearlySummary$tmean)
+    # yearlySummary$precipAnom<-yearlySummary$sumPrecip-mean(yearlySummary$sumPrecip)
+    # # add in seasonal and annual drought indices - SPI
+    # yearlySummary$JanDecSPI<-allDataSubset[which(allDataSubset$variable==12),9]
+    # yearlySummary$JanMarSPI<-allDataSubset[which(allDataSubset$variable==3),8]
+    # yearlySummary$AprJunSPI<-allDataSubset[which(allDataSubset$variable==6),8]
+    # yearlySummary$JulSepSPI<-allDataSubset[which(allDataSubset$variable==9),8]
+    # yearlySummary$OctDecSPI<-allDataSubset[which(allDataSubset$variable==12),8]
+    # # add in seasonal and annual drought indices - SPEI
+    # yearlySummary$JanDecSPEI<-allDataSubset[which(allDataSubset$variable==12),12]
+    # yearlySummary$JanMarSPEI<-allDataSubset[which(allDataSubset$variable==3),11]
+    # yearlySummary$AprJunSPEI<-allDataSubset[which(allDataSubset$variable==6),11]
+    # yearlySummary$JulSepSPEI<-allDataSubset[which(allDataSubset$variable==9),11]
+    # yearlySummary$OctDecSPEI<-allDataSubset[which(allDataSubset$variable==12),11]
+    # 
+    # # writing out county data
+    # print(countyStName)
+    # 
+    # # Write the first data set in a new workbook
+    # if(i==1){
+    #   write.xlsx(yearlySummary, file = "AZCountyClimateData.xlsx",
+    #             sheetName = countyName, append = FALSE)
+    # }else{
+    #   write.xlsx(yearlySummary, file = "AZCountyClimateData.xlsx",
+    #              sheetName = countyName, append = TRUE)
+    # }
     
-    # writing out county data
-    print(countyStName)
-    
-    # Write the first data set in a new workbook
-    if(i==1){
-      write.xlsx(yearlySummary, file = "AZCountyClimateData.xlsx",
-                sheetName = countyName, append = FALSE)
-    }else{
-      write.xlsx(yearlySummary, file = "AZCountyClimateData.xlsx",
-                 sheetName = countyName, append = TRUE)
-    }
+    # add county name 
+      allDataSubset$county<-countyName
+    # put in list  
+      datalist[[i]] <- allDataSubset
+      
 }
 
+# all county data
+allCounty = do.call(rbind, datalist)
+allCounty$month<-as.numeric(format(allCounty$date, "%m"))
+
+# load in USDM data
+load("tempDFBind_AZ_USDM.RData")
+
+# add in date fields
+tempDFbind$year<-as.numeric(format(tempDFbind$week, "%Y"))
+tempDFbind$month<-as.numeric(format(tempDFbind$week, "%m"))
+tempDFbind$day<-as.numeric(format(tempDFbind$week, "%d"))
+# thin to last in month
+thinUSDM<- tempDFbind %>% group_by(region,year,month) %>% slice_max(day)
+
+countyClim = merge(thinUSDM, allCounty, by.x=c("year","month","region"), by.y=c("year", "month","county"))
+
+# summary plots
+library(plotly)
+
+p<-ggplot(countyClim, aes(spi3,Exceptional,color=as.factor(month),text=week))+
+      geom_point()+
+      geom_vline(xintercept = 0)+
+      facet_wrap(~as.factor(region), ncol=3)+
+      ggtitle("Exceptional % Coverage with monthly SPI3")
+ggplotly(p,tooltip = c("spi3", "Exceptional", "week"))
+
+p<-ggplot(countyClim, aes(spi12,Exceptional, color=as.factor(month),text=week))+
+    geom_point()+
+    geom_vline(xintercept = 0)+
+    facet_wrap(~as.factor(region), ncol=3)+
+    ggtitle("Exceptional % Coverage with monthly SPI12")
+ggplotly(p,tooltip = c("spi12", "Exceptional", "week"))
+
+p<-ggplot(countyClim, aes(spi3,Extreme, color=as.factor(month),text=week))+
+  geom_point()+
+  geom_vline(xintercept = 0)+
+  facet_wrap(~as.factor(region), ncol=3)+
+  ggtitle("Extreme % Coverage with monthly SPI3")
+ggplotly(p,tooltip = c("spi3", "Extreme", "week"))
+
+p<-ggplot(countyClim, aes(spi12,Extreme, color=as.factor(month),text=week))+
+  geom_point()+
+  geom_vline(xintercept = 0)+
+  facet_wrap(~as.factor(region), ncol=3)+
+  ggtitle("Extreme % Coverage with monthly SPI12")
+ggplotly(p,tooltip = c("spi12", "Extreme", "week"))
+
+p<-ggplot(countyClim, aes(spi3,Severe, color=as.factor(month),text=week))+
+  geom_point()+
+  geom_vline(xintercept = 0)+
+  facet_wrap(~as.factor(region), ncol=3)+
+  ggtitle("Severe % Coverage with monthly SPI3")
+ggplotly(p,tooltip = c("spi3", "Extreme", "week"))
+
+p<-ggplot(countyClim, aes(spi12,Severe, color=as.factor(month),text=week))+
+  geom_point()+
+  geom_vline(xintercept = 0)+
+  facet_wrap(~as.factor(region), ncol=3)+
+  ggtitle("Severe % Coverage with monthly SPI12")
+ggplotly(p,tooltip = c("spi12", "Extreme", "week"))
+
+##
+# plot all cats together? Group by seasons, look at SPI-1, add in RPMS, NDVI estimates
+##
 
